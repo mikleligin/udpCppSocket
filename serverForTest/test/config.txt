@@ -1,0 +1,3 @@
+127.0.0.1 5035 127.0.0.1 6035 1 0.01 log2.txt
+
+//Usage: host1 port1 host2 port2 InstrNum diff filename.txt
