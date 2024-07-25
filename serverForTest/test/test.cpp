@@ -11,6 +11,7 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 #define configName "config.txt"
+#define errorLog "errorLog.txt"
 
 std::mutex mtx;
 double bidPrice1 = 0.0, askPrice1 = 0.0;
@@ -20,6 +21,7 @@ uint8_t type = 1;
 double diff;
 std::string logFileName;
 
+#pragma pack(push, 1)
 struct packet {
     uint8_t header;
     uint8_t symbol;
@@ -33,7 +35,7 @@ struct packet {
     const uint8_t MDEntryIDAsk = 0;
 
 };
-
+#pragma pack(pop)
 void logger(double bid1, double ask1, double bid2, double ask2)
 {
     // Получаем текущее время
@@ -48,6 +50,21 @@ void logger(double bid1, double ask1, double bid2, double ask2)
         << bid1 << ';' << ask1 << ';' << bid2 << ';' << ask2 << std::endl;
 }
 
+void logError(std::string address, int port, packet* pack, int id, int sizePacket, int needSizePacket ) {
+    std::lock_guard<std::mutex> lock(mtx);
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::tm now_tm;
+    localtime_s(&now_tm, &now_c);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::ofstream log_file(errorLog, std::ios_base::app);
+    log_file << std::put_time(&now_tm, "(%H:%M:%S") << '.' << std::setw(3) << std::setfill('0') << ms.count() << ';' << ") "
+        << address << " | " << port << " | header: " << ((pack->header>>6)&3) << " | symbol: " << (int)pack->symbol << " | id: " << id 
+        << " | sizePacket: " << sizePacket << " | needSize:" << needSizePacket 
+        << " | BID: "  << (double)pack->MDEntryPXBid / 1000000 << " | ASK: "  << (double)pack->MDEntryPXAsk/ 1000000  << " | diff:" << diff << std::endl;
+
+}
+
 void receivePackets(int port, int id, const char* address){
 
     // Создаем UDP приемник и биндим сокет адресу. 
@@ -60,7 +77,7 @@ void receivePackets(int port, int id, const char* address){
     recvAddr.sin_port = htons(port);
     inet_pton(AF_INET, address, &recvAddr.sin_addr.s_addr);
     bind(recvSocket, (SOCKADDR*)&recvAddr, sizeof(recvAddr));
-
+    std::cout << "Thread " << id <<  " started\n";
     // Создаем буффер для структуры
     char msg[sizeof(packet)];
     int msgSize = sizeof(msg);
@@ -102,11 +119,15 @@ void receivePackets(int port, int id, const char* address){
                     }
                     bidPrice2 = bidPrice;
                     askPrice2 = askPrice;
+                    
 
                 }
+                continue;
             }
             
         }
+        packet* pack = reinterpret_cast<packet*>(msg);
+        logError(address, port, pack, id, recvMsg, msgSize);
     }
     closesocket(recvSocket);
     WSACleanup();
@@ -114,8 +135,7 @@ void receivePackets(int port, int id, const char* address){
 void readConfig(const std::string& filename, std::string& host1, short& port1, std::string& host2, short& port2, uint8_t& instr_num, double& diff, std::string& logFileName) {
     std::ifstream configFileOpen(filename);
     // Проверяем файл на наличие информции
-    int x = configFileOpen.peek() == std::ifstream::traits_type::eof();
-    if (x!=0)
+    if (configFileOpen.fail())
     {
         std::cerr << "Config file is not exist\n";
         exit(1);
@@ -131,9 +151,10 @@ int main(){
     // Можно использовать несколько вариантов. Например запускать код из консоли и юзать argv[], но я пропишу явно, 
     // чтобы было видно работу с файлом
     readConfig(configName, host1, port1, host2, port2, InstrNum, diff, logFileName);
-    // Приводим всё к рабочему виду и создаем потоки пот каждый порт
+    // Приводим всё к рабочему виду и создаем потоки под каждый порт
     InstrNum -= 48;
     std::thread th1(receivePackets, port1, 1, host1.c_str());
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     std::thread th2(receivePackets, port2, 2, host2.c_str());
     th1.join();
     th2.join();
